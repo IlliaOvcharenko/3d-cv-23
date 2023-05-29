@@ -272,17 +272,30 @@ def normalize_to_perspective(
     points: npt.NDArray,
     apply_skew: bool = True
 ) -> npt.NDArray:
-    a, c, b = calibration["a"], calibration["c"], calibration["b"]
+    a, b = calibration["a"], calibration["b"]
     u_0, v_0 = calibration["u_0"], calibration["v_0"]
     if not apply_skew:
-        c = 0.0
+        c_f = 0.0
+    else: 
+        c_f = calibration["c"] / calibration["b"]
 
     intrinsic = np.array([
-        [1.0,   c, u_0],
+        [1.0, c_f, u_0],
         [0.0, 1.0, v_0],
         [0.0, 0.0, 1.0]
     ])
+    # print(intrinsic)
+    # print(np.linalg.inv(intrinsic))
+    # exit(0)
     return np.linalg.inv(intrinsic) @ points
+
+
+def compute_focal(vp1: npt.NDArray, vp2: npt.NDArray) -> float:
+    u1, v1, w1 = vp1.flatten()
+    u2, v2, w2 = vp2.flatten()
+
+    f = np.sqrt((u1*u2 + v1*v2) / -(w1*w2))
+    return f
 
 
 def test_img_3(fiducial_points: Dict, calibration: Dict) -> None:
@@ -306,33 +319,54 @@ def test_img_3(fiducial_points: Dict, calibration: Dict) -> None:
     meets, joins = get_meets_and_joins(euclidian_to_homogeneous(camera_points))
     print(f"Meet of row lines: {homogeneous_to_euclidian(meets[0]).T.tolist()[0]}")
     print(f"Meet of column lines: {homogeneous_to_euclidian(meets[1]).T.tolist()[0]}")
+    # plot_meets_and_joins(
+    #     meets=meets,
+    #     joins=joins,
+    #     img=undistorted_img,
+    #     fn="meets-and-joins.png",
+    #     x_range=(-9000, 1000),
+    # )
 
-    norm_camera_points = normalize_to_perspective(
-        calibration,
-        euclidian_to_homogeneous(camera_points),
-        apply_skew=True,
-        # apply_skew=False,
-    )
+    # vp1, vp2 = meets
 
-    meets_norm, _ = get_meets_and_joins(norm_camera_points)
-    print(homogeneous_to_euclidian(meets_norm[0]))
-    print(homogeneous_to_euclidian(meets_norm[1]))
+    vp1 = normalize_to_perspective(calibration, meets[0], apply_skew=False)
+    vp2 = normalize_to_perspective(calibration, meets[1], apply_skew=False)
+    # vp1 = normalize_to_perspective(calibration, meets[0], apply_skew=True)
+    # vp2 = normalize_to_perspective(calibration, meets[1], apply_skew=True)
+    print(vp1, vp2)
+
+    # print(
+    #     homogeneous_to_euclidian(
+    #         normalize_to_perspective(calibration, meets[0], apply_skew=True)
+    #     )
+    # )
+    # print(
+    #     homogeneous_to_euclidian(
+    #         normalize_to_perspective(calibration, meets[1], apply_skew=True)
+    #     )
+    # )
     # exit(0)
-    print(homogeneous_to_euclidian(normalize_to_perspective(calibration, meets[0], apply_skew=True)))
-    print(homogeneous_to_euclidian(normalize_to_perspective(calibration, meets[1], apply_skew=True)))
-    exit(0)
+
+    # norm_camera_points = normalize_to_perspective(
+    #     calibration,
+    #     euclidian_to_homogeneous(camera_points),
+    #     # apply_skew=True,
+    #     apply_skew=True,
+    # )
+
+    # meets_norm, _ = get_meets_and_joins(norm_camera_points)
+    # print(homogeneous_to_euclidian(meets_norm[0]))
+    # print(homogeneous_to_euclidian(meets_norm[1]))
+
+    focal = compute_focal(vp1, vp2)
+    print(focal)
+
+    # exit(0)
     # print(norm_camera_points.shape)
     # print(camera_points.shape)
-    print(norm_camera_points.mean(1))
+    # print(norm_camera_points.mean(1))
     # print(camera_points.mean(1))
 
-    plot_meets_and_joins(
-        meets=meets,
-        joins=joins,
-        img=undistorted_img,
-        fn="meets-and-joins.png",
-        x_range=(-9000, 1000),
-    )
 
 
 
