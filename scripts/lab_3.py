@@ -9,7 +9,7 @@
 
 - [x] Plot the corners, joins and meets in the image.
 
-- [ ] Normalize the image points using the given principal point and skew from Zhang
+- [x] Normalize the image points using the given principal point and skew from Zhang
 
 - [ ] Compute the focal length from the two vanishing points using the fact that they are orthogonal in the scene.
 
@@ -180,7 +180,6 @@ def plot_image(
         "red",
     )
 
-
 def get_rows_cols_points(
     fiducial_points: npt.NDArray
 ) -> Tuple[List[npt.NDArray], List[npt.NDArray]]:
@@ -213,43 +212,17 @@ def get_rows_cols_points(
     return rows_points, cols_points
 
 
+def get_singular_vector(M: npt.NDArray) -> npt.NDArray:
+    u, s, vh = np.linalg.svd(M)
+    return vh.T[:, -1].reshape(-1, 1)
 
-def test_img_3(fiducial_points: Dict, calibration: Dict) -> None:
 
-    img_idx = 2
-    world_points = fiducial_points["board"]
-    camera_points = fiducial_points["images"][img_idx]["undistorted"]
-
-    data_folder = Path("data/zhang")
-    jean_yves_folder = data_folder / "jean-yves"
-    distorted_img = read_img(jean_yves_folder / f"CalibIm{img_idx+1}.tif")
-    undistorted_img = undistort_image(distorted_img, calibration)
-    # plot_fiducial_points(
-    #     camera_points,
-    #     undistorted_img,
-    #     f"lab-3-undistorted.png",
-    #     "blue",
-    # )
-
+def get_meets_and_joins(camera_points):
     # Num of parallel lines 8 blocks, 2 lines per block, 16 lines total
-
     rows, cols = get_rows_cols_points(camera_points)
-    # plot_fiducial_points(
-    #     cols[6],
-    #     undistorted_img,
-    #     f"lab-3-undistorted.png",
-    #     "blue",
-    # )
 
-    rows = [euclidian_to_homogeneous(row) for row in rows]
-    cols = [euclidian_to_homogeneous(row) for row in cols]
-
-
-    def get_singular_vector(M: npt.NDArray) -> npt.NDArray:
-        u, s, vh = np.linalg.svd(M)
-        # print(s)
-        return vh.T[:, -1].reshape(-1, 1)
-
+    rows = [row for row in rows]
+    cols = [row for row in cols]
 
     row_joins = []
     for row in rows:
@@ -262,17 +235,10 @@ def test_img_3(fiducial_points: Dict, calibration: Dict) -> None:
 
     row_meet = get_singular_vector(np.hstack(row_joins).T)
     col_meet = get_singular_vector(np.hstack(col_joins).T)
+    return (row_meet, col_meet), row_joins + col_joins
 
-    print(f"Meet of row lines: {homogeneous_to_euclidian(row_meet).T.tolist()[0]}")
-    print(f"Meet of column lines: {homogeneous_to_euclidian(col_meet).T.tolist()[0]}")
-    # exit(0)
 
-    # sample_row = rows[2]
-    # line = get_singular_vector(sample_row.T)
-    # print(line.shape)
-    # print(sample_row.T @ line)
-
-    def plot_meets_and_joins(
+def plot_meets_and_joins(
         meets,
         joins,
         img,
@@ -300,13 +266,75 @@ def test_img_3(fiducial_points: Dict, calibration: Dict) -> None:
         plt.ylim(x_range)
         plt.savefig(fn, bbox_inches="tight")
 
+
+def normalize_to_perspective(
+    calibration: Dict,
+    points: npt.NDArray,
+    apply_skew: bool = True
+) -> npt.NDArray:
+    a, c, b = calibration["a"], calibration["c"], calibration["b"]
+    u_0, v_0 = calibration["u_0"], calibration["v_0"]
+    if not apply_skew:
+        c = 0.0
+
+    intrinsic = np.array([
+        [1.0,   c, u_0],
+        [0.0, 1.0, v_0],
+        [0.0, 0.0, 1.0]
+    ])
+    return np.linalg.inv(intrinsic) @ points
+
+
+def test_img_3(fiducial_points: Dict, calibration: Dict) -> None:
+
+    img_idx = 2
+    world_points = fiducial_points["board"]
+    camera_points = fiducial_points["images"][img_idx]["undistorted"]
+
+    data_folder = Path("data/zhang")
+    jean_yves_folder = data_folder / "jean-yves"
+    distorted_img = read_img(jean_yves_folder / f"CalibIm{img_idx+1}.tif")
+    undistorted_img = undistort_image(distorted_img, calibration)
+    # plot_fiducial_points(
+    #     camera_points,
+    #     undistorted_img,
+    #     f"lab-3-undistorted.png",
+    #     "blue",
+    # )
+
+
+    meets, joins = get_meets_and_joins(euclidian_to_homogeneous(camera_points))
+    print(f"Meet of row lines: {homogeneous_to_euclidian(meets[0]).T.tolist()[0]}")
+    print(f"Meet of column lines: {homogeneous_to_euclidian(meets[1]).T.tolist()[0]}")
+
+    norm_camera_points = normalize_to_perspective(
+        calibration,
+        euclidian_to_homogeneous(camera_points),
+        apply_skew=True,
+        # apply_skew=False,
+    )
+
+    meets_norm, _ = get_meets_and_joins(norm_camera_points)
+    print(homogeneous_to_euclidian(meets_norm[0]))
+    print(homogeneous_to_euclidian(meets_norm[1]))
+    # exit(0)
+    print(homogeneous_to_euclidian(normalize_to_perspective(calibration, meets[0], apply_skew=True)))
+    print(homogeneous_to_euclidian(normalize_to_perspective(calibration, meets[1], apply_skew=True)))
+    exit(0)
+    # print(norm_camera_points.shape)
+    # print(camera_points.shape)
+    print(norm_camera_points.mean(1))
+    # print(camera_points.mean(1))
+
     plot_meets_and_joins(
-        meets=[row_meet, col_meet],
-        joins=row_joins + col_joins,
+        meets=meets,
+        joins=joins,
         img=undistorted_img,
         fn="meets-and-joins.png",
         x_range=(-9000, 1000),
     )
+
+
 
 
 
