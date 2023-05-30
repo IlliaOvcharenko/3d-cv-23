@@ -11,11 +11,11 @@
 
 - [x] Normalize the image points using the given principal point and skew from Zhang
 
-- [ ] Compute the focal length from the two vanishing points using the fact that they are orthogonal in the scene.
+- [x] Compute the focal length from the two vanishing points using the fact that they are orthogonal in the scene.
 
-- [ ] Compute the focal length in an auto-calibration context, meaning, make the assumption that there is zero skew and that principal point is at the enter of the image.
+- [x] Compute the focal length in an auto-calibration context, meaning, make the assumption that there is zero skew and that principal point is at the enter of the image.
 
-- [ ] Compute the relative error of the focal length with respect to the gold-standard calibration computed by Zhang of result from (6) and (7).
+- [x] Compute the relative error of the focal length with respect to the gold-standard calibration computed by Zhang of result from (6) and (7).
 
 - [ ] Ortho-rectify the calibration board using the two vanishing points.
 """
@@ -27,6 +27,7 @@ matplotlib.use('Agg')
 
 import cv2
 import scipy
+import math
 
 import numpy as np
 import numpy.typing as npt
@@ -68,7 +69,6 @@ def read_camera_calibration_matrix(fn: Path) -> Dict:
     with open(fn, "r") as f:
         lines = f.readlines()
     a, c, b, u_0, v_0  = _read_line_of_floats(lines[0])
-    # print(a, c, b)
     k_1, k_2 = _read_line_of_floats(lines[2])
 
     intrinsic = np.array([
@@ -158,28 +158,6 @@ def read_img(fn: Path) -> npt.NDArray:
     return img
 
 
-def plot_image(
-    jean_yves_folder: Path,
-    img_idx: int,
-    calibration: Dict,
-    fiducial_points: Dict,
-) -> None:
-    distorted_img = read_img(jean_yves_folder / f"CalibIm{img_idx}.tif")
-    undistorted_img = undistort_image(distorted_img, calibration)
-
-    plot_fiducial_points(
-        fiducial_points["images"][img_idx-1]["undistorted"],
-        undistorted_img,
-        f"img-{img_idx}-undistorted.png",
-        "blue",
-    )
-    plot_fiducial_points(
-        fiducial_points["images"][img_idx-1]["distorted"],
-        distorted_img,
-        f"img-{img_idx}-distorted.png",
-        "red",
-    )
-
 def get_rows_cols_points(
     fiducial_points: npt.NDArray
 ) -> Tuple[List[npt.NDArray], List[npt.NDArray]]:
@@ -221,17 +199,8 @@ def get_meets_and_joins(camera_points):
     # Num of parallel lines 8 blocks, 2 lines per block, 16 lines total
     rows, cols = get_rows_cols_points(camera_points)
 
-    rows = [row for row in rows]
-    cols = [row for row in cols]
-
-    row_joins = []
-    for row in rows:
-        row_joins.append(get_singular_vector(row.T))
-
-    col_joins = []
-    for col in cols:
-        col_joins.append(get_singular_vector(col.T))
-
+    row_joins = [get_singular_vector(row.T) for row in rows]
+    col_joins = [get_singular_vector(col.T) for col in cols]
 
     row_meet = get_singular_vector(np.hstack(row_joins).T)
     col_meet = get_singular_vector(np.hstack(col_joins).T)
@@ -239,12 +208,12 @@ def get_meets_and_joins(camera_points):
 
 
 def plot_meets_and_joins(
-        meets,
-        joins,
-        img,
-        fn,
-        x_range: Tuple[int] = (-2000, 1000),
-    ):
+    meets,
+    joins,
+    img,
+    fn,
+    x_range: Tuple[int] = (-2000, 1000),
+) -> None:
         plt.figure(figsize=(25, 25))
         plt.imshow(img)
 
@@ -270,23 +239,25 @@ def plot_meets_and_joins(
 def normalize_to_perspective(
     calibration: Dict,
     points: npt.NDArray,
-    apply_skew: bool = True
+    apply_skew: bool = True,
+    apply_principal_point: bool = True,
 ) -> npt.NDArray:
-    a, b = calibration["a"], calibration["b"]
-    u_0, v_0 = calibration["u_0"], calibration["v_0"]
-    if not apply_skew:
-        c_f = 0.0
-    else: 
+    if apply_principal_point:
+        u_0, v_0 = calibration["u_0"], calibration["v_0"]
+    else:
+        img_width, img_height = 640, 480
+        u_0, v_0 = img_width // 2, img_height // 2
+
+    if  apply_skew:
         c_f = calibration["c"] / calibration["b"]
+    else:
+        c_f = 0.0
 
     intrinsic = np.array([
         [1.0, c_f, u_0],
         [0.0, 1.0, v_0],
         [0.0, 0.0, 1.0]
     ])
-    # print(intrinsic)
-    # print(np.linalg.inv(intrinsic))
-    # exit(0)
     return np.linalg.inv(intrinsic) @ points
 
 
@@ -308,6 +279,7 @@ def test_img_3(fiducial_points: Dict, calibration: Dict) -> None:
     jean_yves_folder = data_folder / "jean-yves"
     distorted_img = read_img(jean_yves_folder / f"CalibIm{img_idx+1}.tif")
     undistorted_img = undistort_image(distorted_img, calibration)
+
     # plot_fiducial_points(
     #     camera_points,
     #     undistorted_img,
@@ -319,58 +291,117 @@ def test_img_3(fiducial_points: Dict, calibration: Dict) -> None:
     meets, joins = get_meets_and_joins(euclidian_to_homogeneous(camera_points))
     print(f"Meet of row lines: {homogeneous_to_euclidian(meets[0]).T.tolist()[0]}")
     print(f"Meet of column lines: {homogeneous_to_euclidian(meets[1]).T.tolist()[0]}")
-    # plot_meets_and_joins(
-    #     meets=meets,
-    #     joins=joins,
-    #     img=undistorted_img,
-    #     fn="meets-and-joins.png",
-    #     x_range=(-9000, 1000),
-    # )
+    plot_meets_and_joins(
+        meets=meets,
+        joins=joins,
+        img=undistorted_img,
+        fn="meets-and-joins.png",
+        x_range=(-9000, 1000),
+    )
 
-    # vp1, vp2 = meets
+    zhang_meets = [
+        normalize_to_perspective(
+            calibration, meet,
+            apply_skew=True,
+            apply_principal_point=True,
+        )
+        for meet in meets
+    ]
 
-    vp1 = normalize_to_perspective(calibration, meets[0], apply_skew=False)
-    vp2 = normalize_to_perspective(calibration, meets[1], apply_skew=False)
-    # vp1 = normalize_to_perspective(calibration, meets[0], apply_skew=True)
-    # vp2 = normalize_to_perspective(calibration, meets[1], apply_skew=True)
-    print(vp1, vp2)
+    autocalib_meets = [
+        normalize_to_perspective(
+            calibration, meet,
+            apply_skew=False,
+            apply_principal_point=False,
+        )
+        for meet in meets
+    ]
 
-    # print(
-    #     homogeneous_to_euclidian(
-    #         normalize_to_perspective(calibration, meets[0], apply_skew=True)
-    #     )
+    origin_focal = np.mean([calibration["a"], calibration["b"]])
+    zhang_focal = compute_focal(*zhang_meets)
+    autocalib_focal = compute_focal(*autocalib_meets)
+
+    calc_relative_error = lambda gt, pred: abs(gt - pred) / pred
+    zhang_focal_error = calc_relative_error(origin_focal, zhang_focal)
+    autocalib_focal_error = calc_relative_error(origin_focal, autocalib_focal)
+
+    print(f"Focal lenght (from Zhang paper): {origin_focal}")
+    print(f"Focal lenght ( Zhang skew and principal point, step 6): {zhang_focal}")
+    print(f"Relative error: {zhang_focal_error * 100:.2f}%")
+    print(f"Focal lenght (auto-calibration context, step 7): {autocalib_focal}")
+    print(f"Relative error: {autocalib_focal_error * 100:.2f}%")
+
+    # # rows and cols
+    # v1, v2 = meets
+    # # print(v1, v2)
+    # # v1 = -v1
+    # v2 = -v2
+    # v3 = np.cross(v1.flatten(), v2.flatten()).reshape(-1, 1)
+
+    # v1 = v1 / np.linalg.norm(v1)
+    # v2 = v2 / np.linalg.norm(v2)
+    # v3 = v3 / np.linalg.norm(v3)
+    # R = np.hstack([v1, v2, v3])
+    # K = calibration["intrinsic"]
+    # print(R)
+
+    # ortho_warp = np.linalg.inv(R)
+    # # ortho_warp = K @ np.linalg.inv(R) @ np.linalg.inv(K)
+    # # ortho_warp = np.linalg.inv(ortho_warp)
+    # # print(ortho_warp)
+    # # print(v3)
+    # ortho_img = cv2.warpPerspective(
+    #     undistorted_img,
+    #     ortho_warp,
+    #     (1000, 1000),
+    #     # cv2.INTER_LINEAR | cv2.WARP_MAP,
     # )
-    # print(
-    #     homogeneous_to_euclidian(
-    #         normalize_to_perspective(calibration, meets[1], apply_skew=True)
-    #     )
-    # )
+    # # ortho_img = cv2.warpPerspective(undistorted_img, np.linalg.inv(ortho_warp), (1000, 1000))
+
+    # plt.figure(figsize=(10, 10))
+    # plt.imshow(ortho_img)
+    # plt.savefig("ortho-test.png", bbox_inches="tight")
+
+    K = calibration["intrinsic"]
+    v1, v2 = meets
+
+    v1 = np.linalg.inv(K) @ v1
+    v2 = np.linalg.inv(K) @ v2
+
+    print(camera_points.shape)
+    board_origin = camera_points[:, 3]
+    # board_origin = np.linalg.inv(K) @ board_origin
+    # print(board_origin.shape)
     # exit(0)
+    # print(v1, v2)
+    # v1 = -v1
+    v2 = -v2
+    v3 = np.cross(v1.flatten(), v2.flatten()).reshape(-1, 1)
 
-    # norm_camera_points = normalize_to_perspective(
-    #     calibration,
-    #     euclidian_to_homogeneous(camera_points),
-    #     # apply_skew=True,
-    #     apply_skew=True,
-    # )
+    v1 = v1 / np.linalg.norm(v1)
+    v2 = v2 / np.linalg.norm(v2)
+    v3 = v3 / np.linalg.norm(v3)
+    R = np.hstack([v1, v2, v3])
+    print(R)
 
-    # meets_norm, _ = get_meets_and_joins(norm_camera_points)
-    # print(homogeneous_to_euclidian(meets_norm[0]))
-    # print(homogeneous_to_euclidian(meets_norm[1]))
+    # ortho_warp = np.linalg.inv(R)
+    ortho_warp = K @ np.linalg.inv(R) @ np.linalg.inv(K)
+    # ortho_warp = K @ np.linalg.inv(R) @ np.linalg.inv(K)
+    # ortho_warp = np.linalg.inv(R)
+    # ortho_warp = np.linalg.inv(ortho_warp)
+    print(ortho_warp)
+    # print(v3)
+    ortho_img = cv2.warpPerspective(
+        undistorted_img,
+        ortho_warp,
+        (1000, 1000),
+        # cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+    )
+    # ortho_img = cv2.warpPerspective(undistorted_img, np.linalg.inv(ortho_warp), (1000, 1000))
 
-    focal = compute_focal(vp1, vp2)
-    print(focal)
-
-    # exit(0)
-    # print(norm_camera_points.shape)
-    # print(camera_points.shape)
-    # print(norm_camera_points.mean(1))
-    # print(camera_points.mean(1))
-
-
-
-
-
+    plt.figure(figsize=(10, 10))
+    plt.imshow(ortho_img)
+    plt.savefig("ortho-test.png", bbox_inches="tight")
 
 
 def main():
