@@ -17,7 +17,7 @@
 
 - [x] Compute the relative error of the focal length with respect to the gold-standard calibration computed by Zhang of result from (6) and (7).
 
-- [ ] Ortho-rectify the calibration board using the two vanishing points.
+- [x] Ortho-rectify the calibration board using the two vanishing points.
 """
 import sys, os
 sys.path.append(os.getcwd())
@@ -143,11 +143,9 @@ def plot_fiducial_points(
     plt.figure(figsize=(15, 10))
     plt.imshow(img)
     plt.plot([p[0] for p in points.T], [p[1] for p in points.T], ".", color=color)
-    # TODO plot number of fiducial point
 
     for p_idx, p in enumerate(points.T):
         plt.text(p[0], p[1], p_idx)
-        # plt.text(p[0], p[1], p_idx+1)
 
     plt.savefig(fn, bbox_inches="tight")
 
@@ -172,8 +170,6 @@ def get_rows_cols_points(
         block_row_idx = int( (block_start / 4) // 8 )
         block_col_idx = int( (block_start / 4) %  8 )
 
-        # print(block_row_idx, block_col_idx)
-
         rows[2 * block_row_idx + 0] += [bottom_left, bottom_right]
         rows[2 * block_row_idx + 1] += [top_left, top_right]
 
@@ -182,11 +178,11 @@ def get_rows_cols_points(
 
     rows_points = []
     for row in rows:
-        rows_points.append(np.array([fiducial_points.T[p_idx]for p_idx in row]).T)
+        rows_points.append(np.array([fiducial_points.T[p_idx] for p_idx in row]).T)
 
     cols_points = []
     for col in cols:
-        cols_points.append(np.array([fiducial_points.T[p_idx]for p_idx in col]).T)
+        cols_points.append(np.array([fiducial_points.T[p_idx] for p_idx in col]).T)
     return rows_points, cols_points
 
 
@@ -269,6 +265,47 @@ def compute_focal(vp1: npt.NDArray, vp2: npt.NDArray) -> float:
     return f
 
 
+def ortho_rectify(undistorted_img, calibration, v1, v2, camera_points):
+    K = calibration["intrinsic"]
+
+    v1 = np.linalg.inv(K) @ v1
+    v2 = np.linalg.inv(K) @ v2
+
+    v2 = -v2
+    v3 = np.cross(v1.flatten(), v2.flatten()).reshape(-1, 1)
+
+    v1 = v1 / np.linalg.norm(v1)
+    v2 = v2 / np.linalg.norm(v2)
+    v3 = v3 / np.linalg.norm(v3)
+    R = np.hstack([v1, v2, v3])
+
+    ortho_warp = K @ np.linalg.inv(R) @ np.linalg.inv(K)
+
+    board_top_left = euclidian_to_homogeneous(camera_points.T[224].reshape(-1, 1))
+    board_bottom_right = euclidian_to_homogeneous(camera_points.T[30].reshape(-1, 1))
+    ortho_top_left = homogeneous_to_euclidian(ortho_warp @ board_top_left)
+    ortho_bottom_right= homogeneous_to_euclidian(ortho_warp @ board_bottom_right)
+
+    shift = np.array([
+        [1.0, 0.0, -ortho_top_left.flatten()[0]],
+        [0.0, 1.0, -ortho_top_left.flatten()[1]],
+        [0.0, 0.0,                         1.0],
+    ])
+    ortho_width, ortho_height = homogeneous_to_euclidian(
+        shift @ euclidian_to_homogeneous(ortho_bottom_right)
+    ).flatten()
+
+    ortho_width, ortho_height = int(ortho_width), int(ortho_height)
+    ortho_warp_with_shift = shift @ ortho_warp
+
+    ortho_img = cv2.warpPerspective(
+        undistorted_img,
+        ortho_warp_with_shift,
+        (ortho_height, ortho_width),
+    )
+    return ortho_img
+
+
 def test_img_3(fiducial_points: Dict, calibration: Dict) -> None:
 
     img_idx = 2
@@ -295,7 +332,7 @@ def test_img_3(fiducial_points: Dict, calibration: Dict) -> None:
         meets=meets,
         joins=joins,
         img=undistorted_img,
-        fn="meets-and-joins.png",
+        fn=f"meets-and-joins-img-{img_idx+1}.png",
         x_range=(-9000, 1000),
     )
 
@@ -331,77 +368,12 @@ def test_img_3(fiducial_points: Dict, calibration: Dict) -> None:
     print(f"Focal lenght (auto-calibration context, step 7): {autocalib_focal}")
     print(f"Relative error: {autocalib_focal_error * 100:.2f}%")
 
-    # # rows and cols
-    # v1, v2 = meets
-    # # print(v1, v2)
-    # # v1 = -v1
-    # v2 = -v2
-    # v3 = np.cross(v1.flatten(), v2.flatten()).reshape(-1, 1)
-
-    # v1 = v1 / np.linalg.norm(v1)
-    # v2 = v2 / np.linalg.norm(v2)
-    # v3 = v3 / np.linalg.norm(v3)
-    # R = np.hstack([v1, v2, v3])
-    # K = calibration["intrinsic"]
-    # print(R)
-
-    # ortho_warp = np.linalg.inv(R)
-    # # ortho_warp = K @ np.linalg.inv(R) @ np.linalg.inv(K)
-    # # ortho_warp = np.linalg.inv(ortho_warp)
-    # # print(ortho_warp)
-    # # print(v3)
-    # ortho_img = cv2.warpPerspective(
-    #     undistorted_img,
-    #     ortho_warp,
-    #     (1000, 1000),
-    #     # cv2.INTER_LINEAR | cv2.WARP_MAP,
-    # )
-    # # ortho_img = cv2.warpPerspective(undistorted_img, np.linalg.inv(ortho_warp), (1000, 1000))
-
-    # plt.figure(figsize=(10, 10))
-    # plt.imshow(ortho_img)
-    # plt.savefig("ortho-test.png", bbox_inches="tight")
-
-    K = calibration["intrinsic"]
     v1, v2 = meets
-
-    v1 = np.linalg.inv(K) @ v1
-    v2 = np.linalg.inv(K) @ v2
-
-    print(camera_points.shape)
-    board_origin = camera_points[:, 3]
-    # board_origin = np.linalg.inv(K) @ board_origin
-    # print(board_origin.shape)
-    # exit(0)
-    # print(v1, v2)
-    # v1 = -v1
-    v2 = -v2
-    v3 = np.cross(v1.flatten(), v2.flatten()).reshape(-1, 1)
-
-    v1 = v1 / np.linalg.norm(v1)
-    v2 = v2 / np.linalg.norm(v2)
-    v3 = v3 / np.linalg.norm(v3)
-    R = np.hstack([v1, v2, v3])
-    print(R)
-
-    # ortho_warp = np.linalg.inv(R)
-    ortho_warp = K @ np.linalg.inv(R) @ np.linalg.inv(K)
-    # ortho_warp = K @ np.linalg.inv(R) @ np.linalg.inv(K)
-    # ortho_warp = np.linalg.inv(R)
-    # ortho_warp = np.linalg.inv(ortho_warp)
-    print(ortho_warp)
-    # print(v3)
-    ortho_img = cv2.warpPerspective(
-        undistorted_img,
-        ortho_warp,
-        (1000, 1000),
-        # cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-    )
-    # ortho_img = cv2.warpPerspective(undistorted_img, np.linalg.inv(ortho_warp), (1000, 1000))
+    ortho_img = ortho_rectify(undistorted_img, calibration, v1, v2, camera_points)
 
     plt.figure(figsize=(10, 10))
     plt.imshow(ortho_img)
-    plt.savefig("ortho-test.png", bbox_inches="tight")
+    plt.savefig(f"ortho-img-{img_idx+1}.png", bbox_inches="tight")
 
 
 def main():
