@@ -271,6 +271,7 @@ def ortho_rectify(undistorted_img, calibration, v1, v2, camera_points):
     v1 = np.linalg.inv(K) @ v1
     v2 = np.linalg.inv(K) @ v2
 
+    # v1 = -v1
     v2 = -v2
     v3 = np.cross(v1.flatten(), v2.flatten()).reshape(-1, 1)
 
@@ -317,12 +318,12 @@ def test_img_3(fiducial_points: Dict, calibration: Dict) -> None:
     distorted_img = read_img(jean_yves_folder / f"CalibIm{img_idx+1}.tif")
     undistorted_img = undistort_image(distorted_img, calibration)
 
-    # plot_fiducial_points(
-    #     camera_points,
-    #     undistorted_img,
-    #     f"lab-3-undistorted.png",
-    #     "blue",
-    # )
+    plot_fiducial_points(
+        camera_points,
+        undistorted_img,
+        f"fiducials-img-{img_idx+1}.png",
+        "blue",
+    )
 
 
     meets, joins = get_meets_and_joins(euclidian_to_homogeneous(camera_points))
