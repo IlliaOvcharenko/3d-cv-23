@@ -31,7 +31,6 @@ import matplotlib.pyplot as plt
 
 from typing import (Dict, Tuple)
 from pathlib import Path
-from fire import Fire
 
 
 def read_fiducial_points(jean_yves_folder: Path) -> Dict:
