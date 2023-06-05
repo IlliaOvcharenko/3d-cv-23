@@ -1,8 +1,8 @@
 """
 Topic: Stereo Reconstruction and MLE
-- [ ] Implement the normalized 8-point algorithm
+- [x] Implement the normalized 8-point algorithm
 
-- [ ] Recover E from F by using the gold-standard calibration from Zhang.
+- [x] Recover E from F by using the gold-standard calibration from Zhang.
 
 - [ ] Recover R,t from E by resolving the 4-fold triangulation ambiguity.
 
@@ -24,8 +24,8 @@ so that you might realize the contribution of Hartley's paper
 import sys, os
 sys.path.append(os.getcwd())
 
-import matplotlib
-matplotlib.use('Agg')
+# import matplotlib
+# matplotlib.use('Agg')
 
 import cv2
 import scipy
@@ -37,6 +37,7 @@ import matplotlib.pyplot as plt
 
 from typing import (Dict, Tuple, List)
 from pathlib import Path
+from itertools import product
 
 
 def homogeneous_to_euclidian(v):
@@ -148,16 +149,20 @@ def get_singular_vector(M: npt.NDArray) -> npt.NDArray:
     return vh.T[:, -1].reshape(-1, 1)
 
 
-def get_whitening_transform(points: npt.NDArray) -> Tuple[npt.NDArray, npt.NDArray]:
+def get_mean_and_whitening(points: npt.NDArray) -> Tuple[npt.NDArray, npt.NDArray]:
     mean = points.mean(axis=1).reshape(-1, 1)
     points_cov = np.cov(points - mean)
     d, u = np.linalg.eigh(points_cov)
     d = np.diag(1.0 / np.sqrt(d + 1e-18))
     w = (u @ d) @ u.T
-    return w, mean
+    return mean, w
 
 
-def pad_whitening(t: npt.NDArray, m: npt.NDArray) -> npt.NDArray:
+def compose_normalization_transform(
+    m: npt.NDArray,
+    t: npt.NDArray,
+)-> npt.NDArray:
+
     m = np.pad(-m, [(0, 1), (2, 0)])
     np.fill_diagonal(m, 1)
     t = np.pad(t, [(0, 1), (0, 1)], mode='constant')
@@ -175,31 +180,134 @@ def calc_fundamental_matrix(
     features1: npt.NDArray,
     features2: npt.NDArray
 ) -> npt.NDArray:
+    m, w = get_mean_and_whitening(np.hstack([features1, features2]))
+    norm_t = compose_normalization_transform(m, w)
+
     features1 = euclidian_to_homogeneous(features1)
     features2 = euclidian_to_homogeneous(features2)
-    # TODO normalized points
+
+    # print(features1)
+    # features1 = norm_t @ features1
+    # features1 = np.linalg.inv(norm_t) @ features1
+    # print(features1)
+    # exit(0)
+
+    features1 = norm_t @ features1
+    features2 = norm_t @ features2
+
     A = build_coef_matrix_A(features1, features2)
     fa = get_singular_vector(A)
     Fa = fa.reshape(3, 3)
     u, s, vh = np.linalg.svd(Fa)
     s[-1] = 0.0
-    F = u @ np.diag(s) @ vh
+    Fn = u @ np.diag(s) @ vh
+
+    F = norm_t.T @ Fn @ norm_t
+    # F = np.linalg.inv(norm_t).T @ Fn @ np.linalg.inv(norm_t)
     return F
 
-    # print(u)
-    # print(s)
-    # print(vh)
-    # print()
-    # print(Fa)
-    # print(u @ np.diag(s) @ vh)
-    # print(A.shape)
-
+    # # Without normalization
+    # features1 = euclidian_to_homogeneous(features1)
+    # features2 = euclidian_to_homogeneous(features2)
+    # A = build_coef_matrix_A(features1, features2)
+    # fa = get_singular_vector(A)
+    # Fa = fa.reshape(3, 3)
+    # u, s, vh = np.linalg.svd(Fa)
+    # s[-1] = 0.0
+    # F = u @ np.diag(s) @ vh
+    # return F
 
 def calc_essentail_matrix(
     fundamental: npt.NDArray,
     intrinsic: npt.NDArray
 )-> npt.NDArray:
-    return np.linalg.inv(intrinsic) @ fundamental @ intrinsic
+    return intrinsic.T @ fundamental @ intrinsic
+    # return np.linalg.inv(intrinsic) @ fundamental @ intrinsic
+
+
+def to_vector(v): return v.reshape(-1, 1)
+
+def triangulate_point(
+    feature_1,
+    feature_2,
+    camera_matrix_1,
+    camera_matrix_2,
+):
+
+    # TODO add whitening
+    x1, y1, _ = feature_1.flatten()
+    x2, y2, _ = feature_2.flatten()
+
+    p1 = camera_matrix_1[1]
+
+    rows = [
+        x1 * to_vector(camera_matrix_1[2]).T - to_vector(camera_matrix_1[0]).T,
+        y1 * to_vector(camera_matrix_1[2]).T - to_vector(camera_matrix_1[1]).T,
+        x2 * to_vector(camera_matrix_2[2]).T - to_vector(camera_matrix_2[0]).T,
+        y2 * to_vector(camera_matrix_2[2]).T - to_vector(camera_matrix_2[1]).T,
+    ]
+
+
+    A = np.vstack(rows)
+    # print(A)
+    x = get_singular_vector(A)
+    x = homogeneous_to_euclidian(x)
+    return x
+
+# def triangulate_points(
+#     features_1,
+#     features_2,
+#     camera_matrix_1,
+#     camera_matrix_2,
+# )
+
+
+def find_valid_R_and_t(
+    R_candidates: List[npt.NDArray],
+    t_candidates: List[npt.NDArray],
+    sample_feature: Tuple[npt.NDArray, npt.NDArray],
+) -> Tuple[npt.NDArray, npt.NDArray]:
+    for R, t in list(product(R_candidates, t_candidates))[:]:
+    # for R, t in product(R_candidates, t_candidates):
+        # print(R)
+        # print(t)
+        # rt = np.vstack([np.hstack([R, t]), np.array([[0, 0, 0, 1]])])
+        # test_vector = np.array([0, 0, 1, 1]).reshape(-1, 1)
+
+        camera_matrix_1 = np.hstack([np.identity(3), np.zeros((3, 1))])
+        camera_matrix_2 = np.hstack([R, t])
+        # print(homogeneous_to_euclidian(rt @ test_vector))
+        # print(camera_matrix_1)
+
+        x = triangulate_point(*sample_feature, camera_matrix_1, camera_matrix_2)
+        # TODO fix
+        # print(x)
+        # print()
+
+    return R, t
+
+
+def recover_rotation_and_translation(
+    essential: npt.NDArray,
+    sample_feature: Tuple[npt.NDArray, npt.NDArray],
+) -> Tuple[npt.NDArray, npt.NDArray]:
+    u, s, vh = np.linalg.svd(essential)
+    u3 = u[:, -1].reshape(-1, 1)
+    w = np.array([
+        [0.0, -1.0, 0.0],
+        [1.0,  0.0, 0.0],
+        [0.0,  0.0, 1.0],
+    ])
+    # z = np.array([
+    #     [ 0.0, 1.0, 0.0],
+    #     [-1.0, 0.0, 0.0],
+    #     [ 0.0, 0.0, 0.0],
+    # ])
+    R_candidates = [ u @ w @ vh, u @ w.T @ vh, ]
+    t_candidates = [ u3, -u3, ]
+
+    R, t = find_valid_R_and_t(R_candidates, t_candidates, sample_feature)
+    return R, t
 
 
 def main():
@@ -223,6 +331,67 @@ def main():
 
 
     F = calc_fundamental_matrix(*tin_features)
+    # # TODO how to check if F is valid?
+    # pair_idx = 0
+    # p1 = euclidian_to_homogeneous(tin_features[0][:, pair_idx].reshape(-1, 1))
+    # p2 = euclidian_to_homogeneous(tin_features[1][:, pair_idx].reshape(-1, 1))
+    # l2 = F @ p1
+    # print(l2.T @ p2)
+    # l1 = (p2.T @ F).T
+    # print(l1.T @ p1)
+    # exit(0)
+    E = calc_essentail_matrix(F, calibration["intrinsic"])
+    # print(E)
+    # u, s, vh = np.linalg.svd(E)
+    # print(s)
+    # print(u)
+    # print(vh)
+
+    sample_feature = [
+        np.linalg.inv(calibration["intrinsic"]) \
+        @ euclidian_to_homogeneous(to_vector(tin_features[0][:, 0])),
+
+        np.linalg.inv(calibration["intrinsic"]) \
+        @ euclidian_to_homogeneous(to_vector(tin_features[1][:, 0])),
+    ]
+
+    R1, t1 = np.identity(3), np.zeros((3, 1))
+    camera_matrix_1 = np.hstack([R1, t1])
+
+    R2, t2 = recover_rotation_and_translation(E, sample_feature)
+    camera_matrix_2 = np.hstack([R2, t2])
+
+    features1, features2 = tin_features
+    features1 = euclidian_to_homogeneous(features1)
+    features2 = euclidian_to_homogeneous(features2)
+    K = calibration["intrinsic"]
+    features1 = np.linalg.inv(K) @ features1
+    features2 = np.linalg.inv(K) @ features2
+
+    triangulated = []
+    for f1, f2 in zip(features1.T, features2.T):
+        x = triangulate_point(f1, f2, camera_matrix_1, camera_matrix_2)
+        triangulated.append(x.flatten())
+
+    print(triangulated)
+
+    fig = plt.figure(figsize=(20, 20))
+    ax = fig.add_subplot(projection='3d')
+    ax.plot(
+        [p[0] for p in triangulated],
+        [p[1] for p in triangulated],
+        [p[2] for p in triangulated],
+        "*",
+        color="green",
+        label="z axis",
+    )
+
+    for p_idx, p in enumerate(triangulated):
+        ax.text(*p, f"{p_idx}")
+    plt.show()
+
+
+
     # img_idx = 1
     # img = tin_imgs[img_idx]
     # features = tin_features[img_idx]
