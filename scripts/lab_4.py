@@ -4,11 +4,11 @@ Topic: Stereo Reconstruction and MLE
 
 - [x] Recover E from F by using the gold-standard calibration from Zhang.
 
-- [ ] Recover R,t from E by resolving the 4-fold triangulation ambiguity.
+- [x] Recover R,t from E by resolving the 4-fold triangulation ambiguity.
 
-- [ ] Triangulate the correspondences of the tin can.
+- [x] Triangulate the correspondences of the tin can.
 
-- [ ] Plot the reconstruction and camera poses with fields of view.
+- [x] Plot the reconstruction and camera poses with fields of view.
 
 - [ ] Minimally parameterize the relative pose (R,t)
 
@@ -38,6 +38,8 @@ import matplotlib.pyplot as plt
 from typing import (Dict, Tuple, List)
 from pathlib import Path
 from itertools import product
+from scipy.spatial.transform import Rotation
+from more_itertools import pairwise
 
 
 def homogeneous_to_euclidian(v):
@@ -180,8 +182,11 @@ def calc_fundamental_matrix(
     features1: npt.NDArray,
     features2: npt.NDArray
 ) -> npt.NDArray:
-    m, w = get_mean_and_whitening(np.hstack([features1, features2]))
-    norm_t = compose_normalization_transform(m, w)
+    m, w = get_mean_and_whitening(features1)
+    norm_t1 = compose_normalization_transform(m, w)
+
+    m, w = get_mean_and_whitening(features2)
+    norm_t2 = compose_normalization_transform(m, w)
 
     features1 = euclidian_to_homogeneous(features1)
     features2 = euclidian_to_homogeneous(features2)
@@ -192,19 +197,47 @@ def calc_fundamental_matrix(
     # print(features1)
     # exit(0)
 
-    features1 = norm_t @ features1
-    features2 = norm_t @ features2
+    features1 = norm_t1 @ features1
+    features2 = norm_t2 @ features2
 
     A = build_coef_matrix_A(features1, features2)
     fa = get_singular_vector(A)
     Fa = fa.reshape(3, 3)
     u, s, vh = np.linalg.svd(Fa)
     s[-1] = 0.0
+
     Fn = u @ np.diag(s) @ vh
 
-    F = norm_t.T @ Fn @ norm_t
+    F = norm_t2.T @ Fn @ norm_t1
     # F = np.linalg.inv(norm_t).T @ Fn @ np.linalg.inv(norm_t)
     return F
+
+    # m, w = get_mean_and_whitening(np.hstack([features1, features2]))
+    # norm_t = compose_normalization_transform(m, w)
+
+    # features1 = euclidian_to_homogeneous(features1)
+    # features2 = euclidian_to_homogeneous(features2)
+
+    # # print(features1)
+    # # features1 = norm_t @ features1
+    # # features1 = np.linalg.inv(norm_t) @ features1
+    # # print(features1)
+    # # exit(0)
+
+    # features1 = norm_t @ features1
+    # features2 = norm_t @ features2
+
+    # A = build_coef_matrix_A(features1, features2)
+    # fa = get_singular_vector(A)
+    # Fa = fa.reshape(3, 3)
+    # u, s, vh = np.linalg.svd(Fa)
+    # s[-1] = 0.0
+
+    # Fn = u @ np.diag(s) @ vh
+
+    # F = norm_t.T @ Fn @ norm_t
+    # # F = np.linalg.inv(norm_t).T @ Fn @ np.linalg.inv(norm_t)
+    # return F
 
     # # Without normalization
     # features1 = euclidian_to_homogeneous(features1)
@@ -217,6 +250,7 @@ def calc_fundamental_matrix(
     # F = u @ np.diag(s) @ vh
     # return F
 
+
 def calc_essentail_matrix(
     fundamental: npt.NDArray,
     intrinsic: npt.NDArray
@@ -228,38 +262,57 @@ def calc_essentail_matrix(
 def to_vector(v): return v.reshape(-1, 1)
 
 def triangulate_point(
-    feature_1,
-    feature_2,
-    camera_matrix_1,
-    camera_matrix_2,
+    f1,
+    f2,
+    rt1,
+    rt2,
 ):
-
-    # TODO add whitening
-    x1, y1, _ = feature_1.flatten()
-    x2, y2, _ = feature_2.flatten()
-
-    p1 = camera_matrix_1[1]
+    x1, y1, _ = f1.flatten()
+    x2, y2, _ = f2.flatten()
 
     rows = [
-        x1 * to_vector(camera_matrix_1[2]).T - to_vector(camera_matrix_1[0]).T,
-        y1 * to_vector(camera_matrix_1[2]).T - to_vector(camera_matrix_1[1]).T,
-        x2 * to_vector(camera_matrix_2[2]).T - to_vector(camera_matrix_2[0]).T,
-        y2 * to_vector(camera_matrix_2[2]).T - to_vector(camera_matrix_2[1]).T,
+        x1 * to_vector(rt1[2]).T - to_vector(rt1[0]).T,
+        y1 * to_vector(rt1[2]).T - to_vector(rt1[1]).T,
+        x2 * to_vector(rt2[2]).T - to_vector(rt2[0]).T,
+        y2 * to_vector(rt2[2]).T - to_vector(rt2[1]).T,
     ]
 
 
     A = np.vstack(rows)
-    # print(A)
     x = get_singular_vector(A)
-    x = homogeneous_to_euclidian(x)
     return x
 
-# def triangulate_points(
-#     features_1,
-#     features_2,
-#     camera_matrix_1,
-#     camera_matrix_2,
-# )
+
+def triangulate_set_of_points(
+    features1,
+    features2,
+    rt1,
+    rt2,
+    K,
+):
+    features1 = euclidian_to_homogeneous(features1)
+    features2 = euclidian_to_homogeneous(features2)
+    features1 = np.linalg.inv(K) @ features1
+    features2 = np.linalg.inv(K) @ features2
+
+    m, w = get_mean_and_whitening(homogeneous_to_euclidian(features1))
+    norm_t1 = compose_normalization_transform(m, w)
+    m, w = get_mean_and_whitening(homogeneous_to_euclidian(features2))
+    norm_t2 = compose_normalization_transform(m, w)
+
+    features1 = norm_t1 @ features1
+    features2 = norm_t2 @ features2
+    camera_matrix_1 = norm_t1 @ rt1
+    camera_matrix_2 = norm_t2 @ rt2
+
+
+    triangulated = []
+    for f1, f2 in zip(features1.T, features2.T):
+        x = homogeneous_to_euclidian(
+            triangulate_point(f1, f2, camera_matrix_1, camera_matrix_2)
+        )
+        triangulated.append(x.flatten())
+    return triangulated
 
 
 def find_valid_R_and_t(
@@ -267,24 +320,36 @@ def find_valid_R_and_t(
     t_candidates: List[npt.NDArray],
     sample_feature: Tuple[npt.NDArray, npt.NDArray],
 ) -> Tuple[npt.NDArray, npt.NDArray]:
-    for R, t in list(product(R_candidates, t_candidates))[:]:
-    # for R, t in product(R_candidates, t_candidates):
-        # print(R)
-        # print(t)
-        # rt = np.vstack([np.hstack([R, t]), np.array([[0, 0, 0, 1]])])
-        # test_vector = np.array([0, 0, 1, 1]).reshape(-1, 1)
+    # return R_candidates[0], t_candidates[0]
+    # return R_candidates[1], t_candidates[1]
+    # return R_candidates[0], t_candidates[1]
+    # return R_candidates[1], t_candidates[0]
 
-        camera_matrix_1 = np.hstack([np.identity(3), np.zeros((3, 1))])
-        camera_matrix_2 = np.hstack([R, t])
-        # print(homogeneous_to_euclidian(rt @ test_vector))
-        # print(camera_matrix_1)
+    for R, t in product(R_candidates, t_candidates):
+        rt = np.vstack([np.hstack([R, t]), np.array([[0, 0, 0, 1]])])
+        test_vector = np.array([0, 0, 1, 1]).reshape(-1, 1)
 
-        x = triangulate_point(*sample_feature, camera_matrix_1, camera_matrix_2)
-        # TODO fix
-        # print(x)
-        # print()
+        rt1 = np.vstack([
+            np.hstack([np.identity(3), np.zeros((3, 1))]),
+            np.array([[0, 0, 0, 1]])
+        ])
+        rt2 = np.vstack([
+            np.hstack([R, t]),
+            np.array([[0, 0, 0, 1]])
+        ])
 
-    return R, t
+
+        cam1_x = triangulate_point(*sample_feature, rt1, rt2)
+        cam2_x = rt2 @ cam1_x
+
+        cam1_x = homogeneous_to_euclidian(cam1_x)
+        cam2_x = homogeneous_to_euclidian(cam2_x)
+
+        # Check if point located in front of camera for both cam1 and cam2
+        if (cam1_x.flatten()[-1] >= 0.0) and (cam2_x.flatten()[-1] >= 0.0):
+            return R, t
+
+    raise Exception("No valid R and t")
 
 
 def recover_rotation_and_translation(
@@ -292,6 +357,7 @@ def recover_rotation_and_translation(
     sample_feature: Tuple[npt.NDArray, npt.NDArray],
 ) -> Tuple[npt.NDArray, npt.NDArray]:
     u, s, vh = np.linalg.svd(essential)
+
     u3 = u[:, -1].reshape(-1, 1)
     w = np.array([
         [0.0, -1.0, 0.0],
@@ -310,12 +376,152 @@ def recover_rotation_and_translation(
     return R, t
 
 
+def draw_fov(ax, camera_origin, fov_points, fov_color):
+    for fov_p in fov_points:
+        ax.plot(
+            [camera_origin[0], fov_p[0]],
+            [camera_origin[1], fov_p[1]],
+            [camera_origin[2], fov_p[2]],
+            color=fov_color,
+        )
+
+    for (fov_p1, fov_p2) in pairwise(fov_points + [fov_points[0]]):
+        ax.plot(
+            [fov_p1[0], fov_p2[0]],
+            [fov_p1[1], fov_p2[1]],
+            [fov_p1[2], fov_p2[2]],
+            color=fov_color,
+        )
+
+
+def draw_basis(ax, origin, x, y, z, name, fov_points=None, fov_color=None):
+    ax.plot(
+        [origin[0], x[0]],
+        [origin[1], x[1]],
+        [origin[2], x[2]],
+        color="red",
+        label="x axis",
+    )
+    ax.plot(
+        [origin[0], y[0]],
+        [origin[1], y[1]],
+        [origin[2], y[2]],
+        color="blue",
+        label="y axis",
+    )
+
+    ax.plot(
+        [origin[0], z[0]],
+        [origin[1], z[1]],
+        [origin[2], z[2]],
+        color="green",
+        label="z axis",
+    )
+    origin_text_shift = np.array([[-0.05, -0.05, -0.05]]).T
+    ax.text(*(origin + origin_text_shift).T[0], name)
+    ax.text(*x.T[0], f"x")
+    ax.text(*y.T[0], f"y")
+    ax.text(*z.T[0], f"z")
+
+    if fov_points is not None:
+        draw_fov(ax, origin, fov_points, fov_color)
+
+
+def calculate_fov_points(calibration, z_axis, fov_scale):
+    fx = calibration["a"]
+    fy = calibration["b"]
+    fov_x = math.degrees(math.atan(640 / (2*fx)))
+    fov_y = math.degrees(math.atan(480 / (2*fy)))
+    # print(fx, fy)
+    # print(fov_x, fov_y)
+
+    fov_vec = z_axis * fov_scale
+    fov_points = [
+        Rotation.from_euler("xy", [fov_y, fov_x], degrees=True).as_matrix() @ fov_vec,
+        Rotation.from_euler("xy", [-fov_y, fov_x], degrees=True).as_matrix() @ fov_vec,
+        Rotation.from_euler("xy", [-fov_y, -fov_x], degrees=True).as_matrix() @ fov_vec,
+        Rotation.from_euler("xy", [fov_y, -fov_x], degrees=True).as_matrix() @ fov_vec,
+    ]
+    return fov_points
+
+
+def draw_cameras(ax, R2, t2, calibration):
+    cam1_origin = np.array([[0, 0, 0]]).T * 0.2
+    cam1_z_axis = np.array([[0, 0, 1]]).T * 0.2
+    cam1_y_axis = np.array([[0, 1, 0]]).T * 0.2
+    cam1_x_axis = np.array([[1, 0, 0]]).T * 0.2
+
+    cam2_extrinsics = np.vstack([np.hstack([R2, t2]), np.array([[0, 0, 0, 1]])])
+
+    cam2_origin = np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(cam1_origin)
+    cam2_z_axis = np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(cam1_z_axis)
+    cam2_y_axis = np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(cam1_y_axis)
+    cam2_x_axis = np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(cam1_x_axis)
+
+
+    cam2_origin = homogeneous_to_euclidian(cam2_origin)
+    cam2_z_axis = homogeneous_to_euclidian(cam2_z_axis)
+    cam2_y_axis = homogeneous_to_euclidian(cam2_y_axis)
+    cam2_x_axis = homogeneous_to_euclidian(cam2_x_axis)
+
+    fov_color = "lightblue"
+    fov_scale = 15
+    fov_points = calculate_fov_points(
+        calibration,
+        cam1_z_axis,
+        fov_scale
+    )
+
+    fov1_points = fov_points
+    fov2_points = [np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(fp) 
+                   for fp in fov_points]
+    fov2_points = [homogeneous_to_euclidian(fp) for fp in fov2_points]
+
+    draw_basis(
+        ax,
+        cam1_origin,
+        cam1_x_axis,
+        cam1_y_axis,
+        cam1_z_axis,
+        f"Cam 1",
+        fov_points=fov1_points,
+        fov_color=fov_color,
+    )
+
+    draw_basis(
+        ax,
+        cam2_origin,
+        cam2_x_axis,
+        cam2_y_axis,
+        cam2_z_axis,
+        f"Cam 2",
+        fov_points=fov2_points,
+        fov_color=fov_color,
+    )
+
+
+def is_ratation(R):
+    if R.ndim != 2 or R.shape[0] != R.shape[1]:
+        return False
+    should_be_identity = np.allclose(R.dot(R.T), np.identity(R.shape[0], np.float32))
+    should_be_one = np.allclose(np.linalg.det(R), 1)
+    return should_be_identity and should_be_one
+
+
+def plot_fatures_on_tin():
+    img_idx = 1
+    img = tin_imgs[img_idx]
+    features = tin_features[img_idx]
+    plot_teatin_with_features(img, features, img_idx)
+
+
 def main():
     data_folder = Path("data/zhang")
     jean_yves_folder = data_folder / "jean-yves"
 
     calibration_fn = data_folder / "completecalibration.txt"
     calibration = read_camera_calibration_matrix(calibration_fn)
+    K = calibration["intrinsic"]
 
     tin_img_filenames = [
         data_folder / "teatin1.png",
@@ -340,43 +546,42 @@ def main():
     # l1 = (p2.T @ F).T
     # print(l1.T @ p1)
     # exit(0)
-    E = calc_essentail_matrix(F, calibration["intrinsic"])
-    # print(E)
+    E = calc_essentail_matrix(F, K)
+    print(E)
     # u, s, vh = np.linalg.svd(E)
     # print(s)
     # print(u)
     # print(vh)
 
     sample_feature = [
-        np.linalg.inv(calibration["intrinsic"]) \
-        @ euclidian_to_homogeneous(to_vector(tin_features[0][:, 0])),
-
-        np.linalg.inv(calibration["intrinsic"]) \
-        @ euclidian_to_homogeneous(to_vector(tin_features[1][:, 0])),
+        np.linalg.inv(K) @ euclidian_to_homogeneous(to_vector(tin_features[0][:, 0])),
+        np.linalg.inv(K) @ euclidian_to_homogeneous(to_vector(tin_features[1][:, 0])),
     ]
 
     R1, t1 = np.identity(3), np.zeros((3, 1))
-    camera_matrix_1 = np.hstack([R1, t1])
+    rt1 = np.hstack([R1, t1])
 
     R2, t2 = recover_rotation_and_translation(E, sample_feature)
-    camera_matrix_2 = np.hstack([R2, t2])
+    rt2 = np.hstack([R2, t2])
+
+    print(f"is rotation: {is_ratation(R1)}")
+    print(f"is rotation: {is_ratation(R2)}")
 
     features1, features2 = tin_features
-    features1 = euclidian_to_homogeneous(features1)
-    features2 = euclidian_to_homogeneous(features2)
-    K = calibration["intrinsic"]
-    features1 = np.linalg.inv(K) @ features1
-    features2 = np.linalg.inv(K) @ features2
 
-    triangulated = []
-    for f1, f2 in zip(features1.T, features2.T):
-        x = triangulate_point(f1, f2, camera_matrix_1, camera_matrix_2)
-        triangulated.append(x.flatten())
-
-    print(triangulated)
+    triangulated = triangulate_set_of_points(
+        features1,
+        features2,
+        rt1,
+        rt2,
+        K,
+    )
 
     fig = plt.figure(figsize=(20, 20))
     ax = fig.add_subplot(projection='3d')
+
+    draw_cameras(ax, R2, t2, calibration)
+
     ax.plot(
         [p[0] for p in triangulated],
         [p[1] for p in triangulated],
@@ -388,14 +593,10 @@ def main():
 
     for p_idx, p in enumerate(triangulated):
         ax.text(*p, f"{p_idx}")
+    # ax.view_init(vertical_axis="y")
+    ax.set_aspect("equal")
     plt.show()
 
-
-
-    # img_idx = 1
-    # img = tin_imgs[img_idx]
-    # features = tin_features[img_idx]
-    # plot_teatin_with_features(img, features, img_idx)
 
 
 if __name__ == "__main__":
