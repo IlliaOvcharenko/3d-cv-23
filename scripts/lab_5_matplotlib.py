@@ -19,8 +19,7 @@ import math
 
 import numpy as np # numpy==1.24.3
 import numpy.typing as npt
-import matplotlib.pyplot as plt # to draw 2d
-import plotly.graph_objects as go # to draw 3d
+import matplotlib.pyplot as plt
 
 from typing import (Dict, Tuple, List)
 from pathlib import Path
@@ -101,6 +100,15 @@ def to_pixel_coords(
         points *= np.array([img_w, img_h]).reshape(-1, 1)
         updated_features.append(points)
     return updated_features
+
+
+def plot_teatin_with_features(img, features, img_idx) -> None:
+    plt.figure(figsize=(10, 10))
+    plt.imshow(img)
+    plt.plot(features[0], features[1], "*", color="red")
+    for p_idx, p in enumerate(features.T):
+        plt.text(p[0], p[1], p_idx)
+    plt.savefig(f"teatin-features-img-{img_idx+1}-undistorted.png", bbox_inches="tight")
 
 
 def build_coef_matrix_A(
@@ -327,6 +335,130 @@ def recover_rotation_and_translation(
     return R, t
 
 
+def draw_fov(ax, camera_origin, fov_points, fov_color):
+    for fov_p in fov_points:
+        ax.plot(
+            [camera_origin[0], fov_p[0]],
+            [camera_origin[1], fov_p[1]],
+            [camera_origin[2], fov_p[2]],
+            color=fov_color,
+        )
+
+    for (fov_p1, fov_p2) in pairwise(fov_points + [fov_points[0]]):
+        ax.plot(
+            [fov_p1[0], fov_p2[0]],
+            [fov_p1[1], fov_p2[1]],
+            [fov_p1[2], fov_p2[2]],
+            color=fov_color,
+        )
+
+
+def draw_basis(ax, origin, x, y, z, name, fov_points=None, fov_color=None):
+    ax.plot(
+        [origin[0], x[0]],
+        [origin[1], x[1]],
+        [origin[2], x[2]],
+        color="red",
+        label="x axis",
+    )
+    ax.plot(
+        [origin[0], y[0]],
+        [origin[1], y[1]],
+        [origin[2], y[2]],
+        color="blue",
+        label="y axis",
+    )
+
+    ax.plot(
+        [origin[0], z[0]],
+        [origin[1], z[1]],
+        [origin[2], z[2]],
+        color="green",
+        label="z axis",
+    )
+    origin_text_shift = np.array([[-0.05, -0.05, -0.05]]).T
+    ax.text(*(origin + origin_text_shift).T[0], name)
+    ax.text(*x.T[0], f"x")
+    ax.text(*y.T[0], f"y")
+    ax.text(*z.T[0], f"z")
+
+    if fov_points is not None:
+        draw_fov(ax, origin, fov_points, fov_color)
+
+
+def calculate_fov_points(calibration, z_axis, fov_scale):
+    fx = calibration["a"]
+    fy = calibration["b"]
+    fov_x = math.degrees(math.atan(640 / (2*fx)))
+    fov_y = math.degrees(math.atan(480 / (2*fy)))
+    # print(fx, fy)
+    # print(fov_x, fov_y)
+
+    fov_vec = z_axis * fov_scale
+    fov_points = [
+        Rotation.from_euler("xy", [fov_y, fov_x], degrees=True).as_matrix() @ fov_vec,
+        Rotation.from_euler("xy", [-fov_y, fov_x], degrees=True).as_matrix() @ fov_vec,
+        Rotation.from_euler("xy", [-fov_y, -fov_x], degrees=True).as_matrix() @ fov_vec,
+        Rotation.from_euler("xy", [fov_y, -fov_x], degrees=True).as_matrix() @ fov_vec,
+    ]
+    return fov_points
+
+
+def draw_cameras(ax, R2, t2, calibration):
+    cam1_origin = np.array([[0, 0, 0]]).T * 0.2
+    cam1_z_axis = np.array([[0, 0, 1]]).T * 0.2
+    cam1_y_axis = np.array([[0, 1, 0]]).T * 0.2
+    cam1_x_axis = np.array([[1, 0, 0]]).T * 0.2
+
+    cam2_extrinsics = np.vstack([np.hstack([R2, t2]), np.array([[0, 0, 0, 1]])])
+
+    cam2_origin = np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(cam1_origin)
+    cam2_z_axis = np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(cam1_z_axis)
+    cam2_y_axis = np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(cam1_y_axis)
+    cam2_x_axis = np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(cam1_x_axis)
+
+
+    cam2_origin = homogeneous_to_euclidian(cam2_origin)
+    cam2_z_axis = homogeneous_to_euclidian(cam2_z_axis)
+    cam2_y_axis = homogeneous_to_euclidian(cam2_y_axis)
+    cam2_x_axis = homogeneous_to_euclidian(cam2_x_axis)
+
+    fov_color = "lightblue"
+    fov_scale = 15
+    fov_points = calculate_fov_points(
+        calibration,
+        cam1_z_axis,
+        fov_scale
+    )
+
+    fov1_points = fov_points
+    fov2_points = [np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(fp) 
+                   for fp in fov_points]
+    fov2_points = [homogeneous_to_euclidian(fp) for fp in fov2_points]
+
+    draw_basis(
+        ax,
+        cam1_origin,
+        cam1_x_axis,
+        cam1_y_axis,
+        cam1_z_axis,
+        f"Cam 1",
+        fov_points=fov1_points,
+        fov_color=fov_color,
+    )
+
+    draw_basis(
+        ax,
+        cam2_origin,
+        cam2_x_axis,
+        cam2_y_axis,
+        cam2_z_axis,
+        f"Cam 2",
+        fov_points=fov2_points,
+        fov_color=fov_color,
+    )
+
+
 def is_rotation(R):
     if R.ndim != 2 or R.shape[0] != R.shape[1]:
         return False
@@ -335,29 +467,35 @@ def is_rotation(R):
     return should_be_identity and should_be_one
 
 
-# def undistort_image(distorted_img: npt.NDArray, calibration: Dict) -> npt.NDArray:
-#     return cv2.undistort(
-#         distorted_img,
-#         calibration["intrinsic"],
-#         np.array([calibration["k_1"], calibration["k_2"], 0.0, 0.0]),
-#     )
+def plot_fatures_on_tin():
+    img_idx = 1
+    img = tin_imgs[img_idx]
+    features = tin_features[img_idx]
+    plot_teatin_with_features(img, features, img_idx)
 
 
-# def undistort_features(features: npt.NDArray, calibration: Dict) -> npt.NDArray:
-
-#     undistorted = cv2.undistortPoints(
-#         features,
-#         calibration["intrinsic"],
-#         # 0 means no tangential distortion
-#         np.array([calibration["k_1"], calibration["k_2"], 0.0, 0.0]),
-#         P=calibration["intrinsic"]
-#     )
-
-#     undistorted = undistorted.reshape(-1, 2).T
-#     return undistorted
+def undistort_image(distorted_img: npt.NDArray, calibration: Dict) -> npt.NDArray:
+    return cv2.undistort(
+        distorted_img,
+        calibration["intrinsic"],
+        np.array([calibration["k_1"], calibration["k_2"], 0.0, 0.0]),
+    )
 
 
-# Bundle adjustment stuff
+def undistort_features(features: npt.NDArray, calibration: Dict) -> npt.NDArray:
+
+    undistorted = cv2.undistortPoints(
+        features,
+        calibration["intrinsic"],
+        # 0 means no tangential distortion
+        np.array([calibration["k_1"], calibration["k_2"], 0.0, 0.0]),
+        P=calibration["intrinsic"]
+    )
+
+    undistorted = undistorted.reshape(-1, 2).T
+    return undistorted
+
+
 def reprojection_error(
     features1,
     features2,
@@ -531,261 +669,9 @@ def bundle_adjustment(
     return R_adj, t_adj, triangulated_adj
 
 
-# Visualization stuff
-def plot_teatin_with_features(img, features, img_idx) -> None:
-    plt.figure(figsize=(10, 10))
-    plt.imshow(img)
-    plt.plot(features[0], features[1], "*", color="red")
-    for p_idx, p in enumerate(features.T):
-        plt.text(p[0], p[1], p_idx)
-    plt.savefig(f"teatin-features-img-{img_idx+1}-undistorted.png", bbox_inches="tight")
-
-
-def get_colors(triangulated, tin_imgs, features1, features2):
-    triangulated_colors = [
-        np.mean([
-            tin_imgs[0][int(f1[0]), int(f1[1])],
-            tin_imgs[1][int(f2[0]), int(f2[1])],
-        ], axis=0).astype(int)
-        for f1, f2 in zip(features1.T, features2.T)
-    ]
-    triangulated_colors = [f"rgb({c[0]}, {c[1]}, {c[2]})" for c in triangulated_colors]
-    return triangulated_colors
-
-
-def draw_fov(camera_origin, fov_points, fov_color):
-    camera_origin = camera_origin.flatten()
-    fov_points = [p.flatten() for p in fov_points]
-
-    fov = []
-    for fov_p in fov_points:
-        fov.append(go.Scatter3d(
-            x=[camera_origin[0], fov_p[0]],
-            y=[camera_origin[1], fov_p[1]],
-            z=[camera_origin[2], fov_p[2]],
-            mode="lines",
-            line=dict(
-                color=fov_color,
-            ),
-        ))
-
-    for (fov_p1, fov_p2) in pairwise(fov_points + [fov_points[0]]):
-        fov.append(go.Scatter3d(
-            x=[fov_p1[0], fov_p2[0]],
-            y=[fov_p1[1], fov_p2[1]],
-            z=[fov_p1[2], fov_p2[2]],
-            mode="lines",
-            line=dict(
-                color=fov_color,
-            ),
-        ))
-    return fov
-
-
-def draw_basis(origin, x, y, z, name, fov_points=None, fov_color=None):
-
-    origin = origin.flatten()
-    x = x.flatten()
-    y = y.flatten()
-    z = z.flatten()
-
-    basis = [
-        go.Scatter3d(
-            x=[origin[0], x[0]],
-            y=[origin[1], x[1]],
-            z=[origin[2], x[2]],
-            mode="lines",
-            line=dict(
-                color="red",
-            )
-        ),
-        go.Scatter3d(
-            x=[origin[0], y[0]],
-            y=[origin[1], y[1]],
-            z=[origin[2], y[2]],
-            mode="lines",
-            line=dict(
-                color="blue",
-            )
-        ),
-        go.Scatter3d(
-            x=[origin[0], z[0]],
-            y=[origin[1], z[1]],
-            z=[origin[2], z[2]],
-            mode="lines",
-            line=dict(
-                color="green",
-            )
-        ),
-    ]
-    origin_text_shift = np.array([-0.05, -0.05, -0.05])
-    basis += [
-        go.Scatter3d(
-            x=[(origin+origin_text_shift)[0]],
-            y=[(origin+origin_text_shift)[1]],
-            z=[(origin+origin_text_shift)[2]],
-            text=name,
-            mode="text",
-        ),
-        go.Scatter3d(
-            x=[x[0]],
-            y=[x[1]],
-            z=[x[2]],
-            text="x",
-            mode="text",
-        ),
-        go.Scatter3d(
-            x=[y[0]],
-            y=[y[1]],
-            z=[y[2]],
-            text="y",
-            mode="text",
-        ),
-        go.Scatter3d(
-            x=[z[0]],
-            y=[z[1]],
-            z=[z[2]],
-            text="z",
-            mode="text",
-        ),
-    ]
-
-    if fov_points is not None:
-        basis += draw_fov(origin, fov_points, fov_color)
-    return basis
-
-
-def calculate_fov_points(calibration, z_axis, fov_scale):
-    fx = calibration["a"]
-    fy = calibration["b"]
-    fov_x = math.degrees(math.atan(640 / (2*fx)))
-    fov_y = math.degrees(math.atan(480 / (2*fy)))
-    # print(fx, fy)
-    # print(fov_x, fov_y)
-
-    fov_vec = z_axis * fov_scale
-    fov_points = [
-        Rotation.from_euler("xy", [fov_y, fov_x], degrees=True).as_matrix() @ fov_vec,
-        Rotation.from_euler("xy", [-fov_y, fov_x], degrees=True).as_matrix() @ fov_vec,
-        Rotation.from_euler("xy", [-fov_y, -fov_x], degrees=True).as_matrix() @ fov_vec,
-        Rotation.from_euler("xy", [fov_y, -fov_x], degrees=True).as_matrix() @ fov_vec,
-    ]
-    return fov_points
-
-
-def draw_cameras(R2, t2, calibration):
-    cam1_origin = np.array([[0, 0, 0]]).T * 0.2
-    cam1_z_axis = np.array([[0, 0, 1]]).T * 0.2
-    cam1_y_axis = np.array([[0, 1, 0]]).T * 0.2
-    cam1_x_axis = np.array([[1, 0, 0]]).T * 0.2
-
-    cam2_extrinsics = np.vstack([np.hstack([R2, t2]), np.array([[0, 0, 0, 1]])])
-
-    cam2_origin = np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(cam1_origin)
-    cam2_z_axis = np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(cam1_z_axis)
-    cam2_y_axis = np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(cam1_y_axis)
-    cam2_x_axis = np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(cam1_x_axis)
-
-
-    cam2_origin = homogeneous_to_euclidian(cam2_origin)
-    cam2_z_axis = homogeneous_to_euclidian(cam2_z_axis)
-    cam2_y_axis = homogeneous_to_euclidian(cam2_y_axis)
-    cam2_x_axis = homogeneous_to_euclidian(cam2_x_axis)
-
-    fov_color = "lightblue"
-    fov_scale = 15
-    fov_points = calculate_fov_points(
-        calibration,
-        cam1_z_axis,
-        fov_scale
-    )
-
-    fov1_points = fov_points
-    fov2_points = [np.linalg.inv(cam2_extrinsics) @ euclidian_to_homogeneous(fp) 
-                   for fp in fov_points]
-    fov2_points = [homogeneous_to_euclidian(fp) for fp in fov2_points]
-
-    basis1 = draw_basis(
-        cam1_origin,
-        cam1_x_axis,
-        cam1_y_axis,
-        cam1_z_axis,
-        f"Cam 1",
-        fov_points=fov1_points,
-        fov_color=fov_color,
-    )
-
-    basis2 = draw_basis(
-        cam2_origin,
-        cam2_x_axis,
-        cam2_y_axis,
-        cam2_z_axis,
-        f"Cam 2",
-        fov_points=fov2_points,
-        fov_color=fov_color,
-    )
-    return basis1 + basis2
-
-
-def draw_triangulated_points(triangulated, triangulated_colors):
-    return [go.Scatter3d(
-        x=[p[0] for p in triangulated],
-        y=[p[1] for p in triangulated],
-        z=[p[2] for p in triangulated],
-        text=[str(i) for i in range(len(triangulated))],
-
-        marker=dict(
-            size=5,
-            symbol="square",
-            color=triangulated_colors,
-        ),
-        mode="markers+text"
-    )]
-
-
-def draw_3d_plot(triangulated, triangulated_colors, R2, t2, calibration):
-    fig = go.Figure(
-        data=draw_triangulated_points(triangulated, triangulated_colors) \
-           + draw_cameras(R2, t2, calibration)
-    )
-
-    fig.update_layout(
-        showlegend=False,
-        hovermode=False,
-        autosize=True,
-        scene=dict(
-            camera=dict(
-                up=dict(x=0, y=1, z=0),
-                eye=dict(x=0.2, y=1, z=-2)
-            ),
-            aspectratio = dict(x=1, y=1, z=1),
-            aspectmode = 'data',
-            yaxis_autorange="reversed",
-            xaxis_autorange="reversed",
-            xaxis=dict(
-                showgrid=True,
-                backgroundcolor="white",
-                gridcolor="lightgray", 
-                showticklabels=False,
-            ),
-            yaxis=dict(
-                showgrid=True,
-                backgroundcolor="white",
-                gridcolor="lightgray", 
-                showticklabels=False,
-            ),
-            zaxis=dict(
-                showgrid=True,
-                backgroundcolor="white",
-                gridcolor="lightgray", 
-                showticklabels=False,
-            ),
-        ),
-    )
-    return fig
-
-
 def main():
+    # TODO plotly 3d viz
+
     # Read all required data
     data_folder = Path("data/zhang")
     jean_yves_folder = data_folder / "jean-yves"
@@ -865,26 +751,28 @@ def main():
         t2 = t2_adj
         triangulated = triangulated_adj
 
-    # Draw plots
-    do_drawing = True
-    if do_drawing:
-        plot_teatin_with_features(tin_imgs[0], tin_features[0], 0)
-        plot_teatin_with_features(tin_imgs[1], tin_features[1], 1)
-        triangulated_colors = get_colors(
-            triangulated,
-            tin_imgs,
-            features1,
-            features2
+    # Draw 3d plot
+    draw_3d = True
+    if draw_3d:
+        fig = plt.figure(figsize=(20, 20))
+        ax = fig.add_subplot(projection='3d')
+
+        draw_cameras(ax, R2, t2, calibration)
+
+        ax.plot(
+            [p[0] for p in triangulated],
+            [p[1] for p in triangulated],
+            [p[2] for p in triangulated],
+            "*",
+            color="green",
+            label="z axis",
         )
-        fig = draw_3d_plot(
-            triangulated,
-            triangulated_colors,
-            R2,
-            t2,
-            calibration,
-        )
-        fig.write_html("tea-tin-stereo-reconstruction.html")
-        # fig.show()
+
+        for p_idx, p in enumerate(triangulated):
+            ax.text(*p, f"{p_idx}")
+        # ax.view_init(vertical_axis="y")
+        ax.set_aspect("equal")
+        plt.show()
 
 
 if __name__ == "__main__":
